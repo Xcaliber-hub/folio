@@ -12,6 +12,7 @@ class MainActivity : ComponentActivity() {
     private val vm: FolioViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashReporter.install(this)
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

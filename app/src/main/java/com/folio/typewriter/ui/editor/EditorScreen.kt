@@ -59,13 +59,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -249,8 +248,10 @@ fun EditorScreen(
                 val px = { d: androidx.compose.ui.unit.Dp -> with(density) { d.toPx() } }
                 val rollerTop = constraints.maxHeight * 0.58f
                 val sheetMinHeight = constraints.maxHeight * 1.6f
+                // The layout can lag one frame behind the text (it is produced after this
+                // composition), so clamp every offset to the text the layout actually holds.
                 val caret: Rect = layout?.let { l ->
-                    l.getCursorRect(value.selection.start.coerceIn(0, value.text.length))
+                    l.getCursorRect(value.selection.start.coerceIn(0, l.layoutInput.text.length))
                 } ?: Rect(0f, 0f, 0f, with(density) { TypewriterText.lineHeight.toPx() })
                 val lineBottomInSheet = px(SheetPadTop) + px(PromptSlot) + caret.bottom
                 val target = rollerTop - lineBottomInSheet - px(2.dp) + dragOffset
@@ -261,48 +262,20 @@ fun EditorScreen(
                 // Ding near the right margin, once per line.
                 LaunchedEffect(layout, value.selection) {
                     val l = layout ?: return@LaunchedEffect
-                    val line = l.getLineForOffset(value.selection.start.coerceIn(0, value.text.length))
+                    val line = l.getLineForOffset(value.selection.start.coerceIn(0, l.layoutInput.text.length))
                     if (caret.left > l.size.width * 0.86f && line != lastDingLine) {
                         lastDingLine = line
                         if (sound) sounds.ding()
                     }
                 }
 
-                // Paper sheet (+ desk lamp light), drawn in its own layer.
+                // Paper sheet, with the desk lamp drawn over it when it's on.
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                         .drawWithContent {
                             drawContent()
-                            if (lamp) {
-                                val apex = Offset(carriageX, rollerTop + px(8.dp))
-                                val top = rollerTop - px(300.dp)
-                                val hw = px(200.dp)
-                                val cone = Path().apply {
-                                    moveTo(apex.x - px(16.dp), apex.y)
-                                    lineTo(apex.x - hw, top)
-                                    quadraticTo(apex.x, top - px(70.dp), apex.x + hw, top)
-                                    lineTo(apex.x + px(16.dp), apex.y)
-                                    close()
-                                }
-                                drawRect(Color(0xFF0D0A0F).copy(alpha = 0.86f))
-                                drawPath(
-                                    cone,
-                                    Brush.radialGradient(
-                                        listOf(Color.Black, Color.Black.copy(alpha = 0.8f), Color.Transparent),
-                                        center = apex, radius = px(340.dp),
-                                    ),
-                                    blendMode = BlendMode.DstOut,
-                                )
-                                drawPath(
-                                    cone,
-                                    Brush.radialGradient(
-                                        listOf(LampGlow.copy(alpha = 0.28f), Color.Transparent),
-                                        center = apex, radius = px(320.dp),
-                                    ),
-                                )
-                            }
+                            if (lamp) drawLamp(Offset(carriageX, rollerTop + px(8.dp)), rollerTop - px(300.dp), px(200.dp), px(16.dp))
                         }
                 ) {
                     Column(
@@ -426,6 +399,45 @@ private fun ToolToggle(icon: ImageVector, label: String, checked: Boolean, onCha
                 modifier = Modifier.size(20.dp),
             )
         }
+    }
+}
+
+/**
+ * Desk lamp: the room goes dark except for a cone of warm light rising from the nip.
+ * Plain clip + fills only (no offscreen layer or blend modes), so it draws the same on every GPU.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLamp(apex: Offset, top: Float, halfWidth: Float, neck: Float) {
+    val cone = Path().apply {
+        moveTo(apex.x - neck, apex.y)
+        lineTo(apex.x - halfWidth, top)
+        lineTo(apex.x - halfWidth * 0.5f, top - halfWidth * 0.22f)
+        lineTo(apex.x, top - halfWidth * 0.3f)
+        lineTo(apex.x + halfWidth * 0.5f, top - halfWidth * 0.22f)
+        lineTo(apex.x + halfWidth, top)
+        lineTo(apex.x + neck, apex.y)
+        close()
+    }
+    val dark = Color(0xFF0D0A0F)
+    // Everything outside the cone: nearly black.
+    clipPath(cone, ClipOp.Difference) { drawRect(dark.copy(alpha = 0.86f)) }
+    // Inside the cone: light that fades with distance from the bulb.
+    val reach = apex.y - top + halfWidth * 0.4f
+    clipPath(cone) {
+        drawRect(
+            Brush.radialGradient(
+                0f to Color.Transparent,
+                0.55f to dark.copy(alpha = 0.25f),
+                1f to dark.copy(alpha = 0.86f),
+                center = apex, radius = reach,
+            )
+        )
+        drawRect(
+            Brush.radialGradient(
+                0f to LampGlow.copy(alpha = 0.28f),
+                1f to Color.Transparent,
+                center = apex, radius = reach,
+            )
+        )
     }
 }
 
