@@ -248,6 +248,7 @@ fun EditorScreen(
             ) {
                 val px = { d: androidx.compose.ui.unit.Dp -> with(density) { d.toPx() } }
                 val rollerTop = constraints.maxHeight * 0.58f
+                val sheetMinHeight = constraints.maxHeight * 1.6f
                 val caret: Rect = layout?.let { l ->
                     l.getCursorRect(value.selection.start.coerceIn(0, value.text.length))
                 } ?: Rect(0f, 0f, 0f, with(density) { TypewriterText.lineHeight.toPx() })
@@ -310,7 +311,7 @@ fun EditorScreen(
                             .wrapContentHeight(Alignment.Top, unbounded = true)
                             .offset { IntOffset(0, sheetY.roundToInt()) }
                             .padding(horizontal = SheetMargin)
-                            .heightIn(min = with(density) { (constraints.maxHeight * 1.6f).toDp() })
+                            .heightIn(min = with(density) { sheetMinHeight.toDp() })
                             .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
                             .paperTexture(paper.color, Ink)
                             .padding(horizontal = SheetPadH)

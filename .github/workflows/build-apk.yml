@@ -24,7 +24,7 @@ jobs:
 
       - name: Build release APK
         env:
-          KEYSTORE_FILE: ${{ runner.temp }}/folio-release.p12 }}
+          KEYSTORE_FILE: ${{ runner.temp }}/folio-release.p12
           KEYSTORE_PASSWORD: ${{ secrets.FOLIO_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.FOLIO_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.FOLIO_KEY_PASSWORD }}
