@@ -67,6 +67,9 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -103,7 +106,13 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.pow
+import kotlin.math.PI
+import com.folio.typewriter.ui.glass.frostedGlass
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
+import kotlin.math.atan
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.roundToInt
 
 private val FirstLines = listOf(
@@ -219,6 +228,7 @@ fun EditorScreen(
     val ink = ribbon.color
     val nipInk = if (lamp) Bone else Ink
     val nipPaper = if (lamp) LampNight else paper.color
+    val haze = rememberHazeState()
     val measurer = rememberTextMeasurer(cacheSize = 128)
     val glyphCache = remember { mutableMapOf<Char, TextLayoutResult>() }
 
@@ -252,11 +262,12 @@ fun EditorScreen(
                 }) { Icon(FolioIcons.Share, "Share") }
             }
 
-            // ---- the machine ----
+            // ---- the machine, with the frosted toolbar floating over its bottom edge ----
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             BoxWithConstraints(
                 Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
+                    .hazeSource(haze)
                     .clipToBounds()
                     .draggable(
                         orientation = Orientation.Vertical,
@@ -299,7 +310,6 @@ fun EditorScreen(
                         if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     }
                 }
-                val foldLayer = rememberGraphicsLayer()
 
                 // Ding near the right margin, once per line.
                 LaunchedEffect(layout, value.selection) {
@@ -328,39 +338,10 @@ fun EditorScreen(
                             .drawWithContent {
                                 val fold = (foldScreenY - sheetY).coerceIn(0f, size.height)
                                 sheetLayer.record { this@drawWithContent.drawContent() }
-                                // Flat part: from the fold down.
+                                // Flat part: from the curl down.
                                 clipRect(top = fold) { drawLayer(sheetLayer) }
-                                // Curled part: hinged on the fold line and tipped back.
-                                foldLayer.pivotOffset = Offset(size.width / 2f, fold)
-                                foldLayer.rotationX = FoldAngle
-                                foldLayer.cameraDistance = 6f // smaller = stronger perspective
-                                foldLayer.record {
-                                    clipRect(bottom = fold) {
-                                        drawLayer(sheetLayer)
-                                        // Light falls off as the paper turns away.
-                                        val reach = px(260.dp)
-                                        drawRect(
-                                            Brush.verticalGradient(
-                                                0f to Color.Black.copy(alpha = 0.34f),
-                                                0.75f to Color.Black.copy(alpha = 0.06f),
-                                                1f to Color.Transparent,
-                                                startY = fold - reach, endY = fold,
-                                            ),
-                                            topLeft = Offset(0f, fold - reach * 3f),
-                                            size = androidx.compose.ui.geometry.Size(size.width, reach * 3f),
-                                        )
-                                    }
-                                }
-                                drawLayer(foldLayer)
-                                // A soft crease shadow just under the bend.
-                                drawRect(
-                                    Brush.verticalGradient(
-                                        0f to Color.Black.copy(alpha = 0.10f), 1f to Color.Transparent,
-                                        startY = fold, endY = fold + px(10.dp),
-                                    ),
-                                    topLeft = Offset(0f, fold),
-                                    size = androidx.compose.ui.geometry.Size(size.width, px(10.dp)),
-                                )
+                                // Above it the sheet wraps back around the platen like a cylinder.
+                                drawPlatenCurl(sheetLayer, fold, radius = px(CurlRadius))
                             }
                             .padding(horizontal = SheetMargin)
                             .heightIn(min = with(density) { sheetMinHeight.toDp() })
@@ -426,11 +407,13 @@ fun EditorScreen(
                 )
             }
 
-            // ---- toolbar above the keyboard ----
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            // ---- toolbar above the keyboard: frosted glass over the page ----
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .frostedGlass(haze, MaterialTheme.colorScheme.surfaceContainerHigh),
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp),
@@ -463,6 +446,7 @@ fun EditorScreen(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -488,66 +472,89 @@ private fun ToolToggle(icon: ImageVector, label: String, checked: Boolean, onCha
     }
 }
 
-/** How far the page above the typing line tips back, in degrees. */
-private const val FoldAngle = 42f
+/** Radius of the platen the page curls around above the typing line. */
+private val CurlRadius = 150.dp
+
+/**
+ * Draws the part of [layer] above [fold] as if the paper wraps back around a cylinder of
+ * [radius]: each thin strip is squashed vertically (it turns away), narrowed (it recedes in
+ * perspective) and shaded (it catches less light). Many strips read as one smooth curve.
+ */
+private fun DrawScope.drawPlatenCurl(layer: GraphicsLayer, fold: Float, radius: Float) {
+    if (fold <= 0f) return
+    val maxAngle = Math.toRadians(96.0).toFloat()
+    val arc = minOf(fold, radius * maxAngle)
+    val strips = 48
+    val hs = arc / strips
+    val cx = size.width / 2f
+    val eye = radius * 2.4f
+    // Far strips first so nearer ones overlap any hairline seams.
+    for (i in strips - 1 downTo 0) {
+        val t0 = i * hs
+        val t1 = t0 + hs
+        val a0 = t0 / radius
+        val a1 = t1 / radius
+        val yBottom = fold - radius * sin(a0)
+        val yTop = fold - radius * sin(a1)
+        val sy = (yBottom - yTop) / hs
+        val mid = (a0 + a1) / 2f
+        val sx = eye / (eye + radius * (1f - cos(mid)))
+        val srcBottom = fold - t0
+        withTransform({
+            translate(left = cx * (1f - sx), top = yBottom - srcBottom * sy)
+            scale(sx, sy, pivot = Offset.Zero)
+        }) {
+            clipRect(top = srcBottom - hs - 1.5f, bottom = srcBottom) {
+                drawLayer(layer)
+                drawRect(Color.Black.copy(alpha = 0.5f * (1f - cos(mid))))
+            }
+        }
+    }
+}
 
 /**
  * Desk lamp: the room goes dark except for a beam of warm light rising from the nip.
- * The edge of the beam is a soft penumbra (stacked clips), the light pools on the page
- * as an ellipse the way a real cone lands on a tilted sheet, and the bulb itself glows.
- * Plain clips and gradient fills only: no offscreen layers or blend modes.
+ * Built only from smooth gradients (a sweep for the beam's soft edges, radials for the
+ * falloff, the pool and the bulb), so there are no hard edges, steps or offscreen layers.
  */
 private fun DrawScope.drawLamp(apex: Offset, spread: Float, neck: Float) {
     val dark = Color(0xFF0B0809)
-    val h = apex.y + 60f
-    fun cone(s: Float) = Path().apply {
-        val n = neck * s
-        val w = n + h * spread * s
-        moveTo(apex.x - n, apex.y)
-        lineTo(apex.x - w, apex.y - h)
-        lineTo(apex.x + w, apex.y - h)
-        lineTo(apex.x + n, apex.y)
-        close()
-    }
-    // 1. The dark room, with a soft edge around the beam.
-    val steps = 9
-    val stepAlpha = 1f - 0.12f.pow(1f / steps)
-    for (i in 0 until steps) {
-        val s = 0.74f + 0.56f * i / (steps - 1)
-        clipPath(cone(s), ClipOp.Difference) { drawRect(dark.copy(alpha = stepAlpha)) }
-    }
-    // 2. Falloff with distance from the bulb.
-    clipPath(cone(1.3f)) {
-        drawRect(
-            Brush.radialGradient(
-                0f to Color.Transparent,
-                0.45f to dark.copy(alpha = 0.18f),
-                1f to dark.copy(alpha = 0.8f),
-                center = apex, radius = h * 0.95f,
-            )
+    // Treat the beam as coming from a point a little below the bulb so its neck has width.
+    val src = Offset(apex.x, apex.y + neck / spread)
+    val reach = src.y + 80f
+    val half = atan(spread) / (2f * PI.toFloat()) // half-angle, in turns
+    val up = 0.75f // sweep stops run clockwise from 3 o'clock; straight up is 0.75
+    val feather = 0.045f
+    fun beam(inside: Color, outside: Color) = Brush.sweepGradient(
+        0f to outside,
+        (up - half - feather) to outside,
+        (up - half + feather * 0.6f) to inside,
+        (up + half - feather * 0.6f) to inside,
+        (up + half + feather) to outside,
+        1f to outside,
+        center = src,
+    )
+    // 1. Warm air inside the beam.
+    drawRect(beam(LampGlow.copy(alpha = 0.22f), Color.Transparent))
+    // 2. Light fades with distance from the bulb.
+    drawRect(
+        Brush.radialGradient(
+            0f to Color.Transparent,
+            0.35f to dark.copy(alpha = 0.10f),
+            1f to dark.copy(alpha = 0.78f),
+            center = src, radius = reach,
         )
-    }
-    // 3. Warm air in the beam, feathered over three nested cones.
-    for (s in floatArrayOf(0.8f, 0.95f, 1.1f)) {
-        clipPath(cone(s)) {
-            drawRect(
-                Brush.radialGradient(
-                    0f to LampGlow.copy(alpha = 0.12f),
-                    1f to Color.Transparent,
-                    center = apex, radius = h * 0.8f,
-                )
-            )
-        }
-    }
+    )
+    // 3. The dark room outside the beam, with a soft penumbra.
+    drawRect(beam(Color.Transparent, dark.copy(alpha = 0.84f)))
     // 4. The pool of light where the beam lands on the page.
-    val poolY = apex.y - h * 0.32f
-    val poolR = neck + h * 0.32f * spread
-    val poolCenter = Offset(apex.x, poolY)
-    scale(scaleX = 1f, scaleY = 0.55f, pivot = poolCenter) {
+    val poolCenter = Offset(apex.x, apex.y - reach * 0.22f)
+    val poolR = neck + reach * 0.22f * spread * 1.1f
+    scale(scaleX = 1f, scaleY = 0.6f, pivot = poolCenter) {
         drawCircle(
             Brush.radialGradient(
-                0f to LampGlow.copy(alpha = 0.26f),
-                0.6f to LampGlow.copy(alpha = 0.08f),
+                0f to LampGlow.copy(alpha = 0.22f),
+                0.55f to LampGlow.copy(alpha = 0.07f),
                 1f to Color.Transparent,
                 center = poolCenter, radius = poolR,
             ),
@@ -555,11 +562,11 @@ private fun DrawScope.drawLamp(apex: Offset, spread: Float, neck: Float) {
         )
     }
     // 5. The bulb: a hot core with a halo.
-    val bulbR = neck * 2.6f
+    val bulbR = neck * 2.4f
     drawCircle(
         Brush.radialGradient(
-            0f to Color(0xFFFFF6E6).copy(alpha = 0.95f),
-            0.25f to LampGlow.copy(alpha = 0.55f),
+            0f to Color(0xFFFFF6E6).copy(alpha = 0.9f),
+            0.22f to LampGlow.copy(alpha = 0.45f),
             1f to Color.Transparent,
             center = apex, radius = bulbR,
         ),

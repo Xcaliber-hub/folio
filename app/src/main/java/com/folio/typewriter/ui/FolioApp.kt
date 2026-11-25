@@ -15,6 +15,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.folio.typewriter.CrashReporter
+import com.folio.typewriter.ui.glass.frostedGlass
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -111,8 +114,10 @@ fun FolioApp(vm: FolioViewModel) {
     FolioTheme(paper = settings.paper.color) {
         // Screens run edge to edge; the two-icon tab pill floats over them.
         val insets = WindowInsets.systemBars.asPaddingValues()
+        val haze = rememberHazeState()
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             AnimatedContent(
+                modifier = Modifier.hazeSource(haze),
                 targetState = screen,
                 transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.96f)) togetherWith fadeOut() },
                 label = "tabs",
@@ -128,15 +133,12 @@ fun FolioApp(vm: FolioViewModel) {
                     )
                 }
             }
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 12.dp,
-                tonalElevation = 3.dp,
-                modifier = Modifier
+            Box(
+                Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = 28.dp),
+                    .padding(bottom = 28.dp)
+                    .frostedGlass(haze, MaterialTheme.colorScheme.surfaceContainerHigh),
             ) {
                 Row(
                     Modifier.padding(6.dp),
