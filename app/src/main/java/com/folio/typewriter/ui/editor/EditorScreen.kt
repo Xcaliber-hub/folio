@@ -3,11 +3,15 @@ package com.folio.typewriter.ui.editor
 import android.content.Intent
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
@@ -57,10 +61,16 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -93,6 +103,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 private val FirstLines = listOf(
@@ -135,6 +146,15 @@ fun EditorScreen(
     var prompt by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var lastDingLine by remember { mutableIntStateOf(-1) }
+    // Every keystroke bumps this; the carriage hops on the y axis in response.
+    var keyTick by remember { mutableIntStateOf(0) }
+    val bob = remember { Animatable(0f) }
+    LaunchedEffect(keyTick) {
+        if (keyTick == 0) return@LaunchedEffect
+        val lift = with(density) { 4.dp.toPx() }
+        bob.animateTo(-lift, tween(durationMillis = 45))
+        bob.animateTo(0f, spring(dampingRatio = 0.32f, stiffness = 900f))
+    }
 
     val sounds = remember { TypewriterSounds(context) }
     DisposableEffect(Unit) { onDispose { sounds.release() } }
@@ -145,6 +165,7 @@ fun EditorScreen(
     )
 
     fun strike() {
+        keyTick++
         if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (sound) sounds.key()
     }
@@ -175,6 +196,7 @@ fun EditorScreen(
         if (delta > 0 && '\n' in new.text.substring(prefix, prefix + delta)) {
             if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             if (sound) sounds.carriageReturn()
+            keyTick++
         } else {
             strike()
         }
@@ -258,6 +280,26 @@ fun EditorScreen(
                 val sheetY by animateFloatAsState(target, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "feed")
                 val caretX = px(SheetMargin) + px(SheetPadH) + caret.left
                 val carriageX by animateFloatAsState(caretX, MaterialTheme.motionScheme.fastSpatialSpec(), label = "carriage")
+                // Where the page starts curling back over the platen: the typing line and the
+                // one above it stay flat, everything higher tips away from you in 3D.
+                val lineH = with(density) { TypewriterText.lineHeight.toPx() }
+                val foldScreenY = rollerTop - lineH * 2.4f
+                val sheetLayer = rememberGraphicsLayer()
+                // Drag the carriage sideways: the caret follows it along the current line,
+                // ticking once per character like a real carriage.
+                fun moveCarriageTo(machineX: Float) {
+                    val l = layout ?: return
+                    val len = l.layoutInput.text.length
+                    val line = l.getLineForOffset(value.selection.start.coerceIn(0, len))
+                    val y = (l.getLineTop(line) + l.getLineBottom(line)) / 2f
+                    val x = machineX - px(SheetMargin) - px(SheetPadH)
+                    val off = l.getOffsetForPosition(Offset(x, y)).coerceIn(0, minOf(len, value.text.length))
+                    if (off != value.selection.start || value.selection.length != 0) {
+                        value = value.copy(selection = TextRange(off))
+                        if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    }
+                }
+                val foldLayer = rememberGraphicsLayer()
 
                 // Ding near the right margin, once per line.
                 LaunchedEffect(layout, value.selection) {
@@ -275,7 +317,7 @@ fun EditorScreen(
                         .fillMaxSize()
                         .drawWithContent {
                             drawContent()
-                            if (lamp) drawLamp(Offset(carriageX, rollerTop + px(8.dp)), rollerTop - px(300.dp), px(200.dp), px(16.dp))
+                            if (lamp) drawLamp(Offset(carriageX, rollerTop + px(8.dp) + bob.value), spread = 0.62f, neck = px(14.dp))
                         }
                 ) {
                     Column(
@@ -283,6 +325,43 @@ fun EditorScreen(
                             .fillMaxWidth()
                             .wrapContentHeight(Alignment.Top, unbounded = true)
                             .offset { IntOffset(0, sheetY.roundToInt()) }
+                            .drawWithContent {
+                                val fold = (foldScreenY - sheetY).coerceIn(0f, size.height)
+                                sheetLayer.record { this@drawWithContent.drawContent() }
+                                // Flat part: from the fold down.
+                                clipRect(top = fold) { drawLayer(sheetLayer) }
+                                // Curled part: hinged on the fold line and tipped back.
+                                foldLayer.pivotOffset = Offset(size.width / 2f, fold)
+                                foldLayer.rotationX = FoldAngle
+                                foldLayer.cameraDistance = 6f // smaller = stronger perspective
+                                foldLayer.record {
+                                    clipRect(bottom = fold) {
+                                        drawLayer(sheetLayer)
+                                        // Light falls off as the paper turns away.
+                                        val reach = px(260.dp)
+                                        drawRect(
+                                            Brush.verticalGradient(
+                                                0f to Color.Black.copy(alpha = 0.34f),
+                                                0.75f to Color.Black.copy(alpha = 0.06f),
+                                                1f to Color.Transparent,
+                                                startY = fold - reach, endY = fold,
+                                            ),
+                                            topLeft = Offset(0f, fold - reach * 3f),
+                                            size = androidx.compose.ui.geometry.Size(size.width, reach * 3f),
+                                        )
+                                    }
+                                }
+                                drawLayer(foldLayer)
+                                // A soft crease shadow just under the bend.
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        0f to Color.Black.copy(alpha = 0.10f), 1f to Color.Transparent,
+                                        startY = fold, endY = fold + px(10.dp),
+                                    ),
+                                    topLeft = Offset(0f, fold),
+                                    size = androidx.compose.ui.geometry.Size(size.width, px(10.dp)),
+                                )
+                            }
                             .padding(horizontal = SheetMargin)
                             .heightIn(min = with(density) { sheetMinHeight.toDp() })
                             .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
@@ -330,13 +409,20 @@ fun EditorScreen(
                 // The rod and carriage: same shapes as the logo.
                 RollerBar(
                     carriageX = carriageX - px(RollerInset),
+                    carriageLift = bob.value,
                     ink = nipInk,
                     paper = nipPaper,
                     modifier = Modifier
                         .offset { IntOffset(0, rollerTop.roundToInt()) }
                         .padding(horizontal = RollerInset)
                         .fillMaxWidth()
-                        .height(RollerHeight),
+                        .height(RollerHeight)
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures { change, _ ->
+                                change.consume()
+                                moveCarriageTo(change.position.x + px(RollerInset))
+                            }
+                        },
                 )
             }
 
@@ -402,43 +488,83 @@ private fun ToolToggle(icon: ImageVector, label: String, checked: Boolean, onCha
     }
 }
 
+/** How far the page above the typing line tips back, in degrees. */
+private const val FoldAngle = 42f
+
 /**
- * Desk lamp: the room goes dark except for a cone of warm light rising from the nip.
- * Plain clip + fills only (no offscreen layer or blend modes), so it draws the same on every GPU.
+ * Desk lamp: the room goes dark except for a beam of warm light rising from the nip.
+ * The edge of the beam is a soft penumbra (stacked clips), the light pools on the page
+ * as an ellipse the way a real cone lands on a tilted sheet, and the bulb itself glows.
+ * Plain clips and gradient fills only: no offscreen layers or blend modes.
  */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawLamp(apex: Offset, top: Float, halfWidth: Float, neck: Float) {
-    val cone = Path().apply {
-        moveTo(apex.x - neck, apex.y)
-        lineTo(apex.x - halfWidth, top)
-        lineTo(apex.x - halfWidth * 0.5f, top - halfWidth * 0.22f)
-        lineTo(apex.x, top - halfWidth * 0.3f)
-        lineTo(apex.x + halfWidth * 0.5f, top - halfWidth * 0.22f)
-        lineTo(apex.x + halfWidth, top)
-        lineTo(apex.x + neck, apex.y)
+private fun DrawScope.drawLamp(apex: Offset, spread: Float, neck: Float) {
+    val dark = Color(0xFF0B0809)
+    val h = apex.y + 60f
+    fun cone(s: Float) = Path().apply {
+        val n = neck * s
+        val w = n + h * spread * s
+        moveTo(apex.x - n, apex.y)
+        lineTo(apex.x - w, apex.y - h)
+        lineTo(apex.x + w, apex.y - h)
+        lineTo(apex.x + n, apex.y)
         close()
     }
-    val dark = Color(0xFF0D0A0F)
-    // Everything outside the cone: nearly black.
-    clipPath(cone, ClipOp.Difference) { drawRect(dark.copy(alpha = 0.86f)) }
-    // Inside the cone: light that fades with distance from the bulb.
-    val reach = apex.y - top + halfWidth * 0.4f
-    clipPath(cone) {
+    // 1. The dark room, with a soft edge around the beam.
+    val steps = 9
+    val stepAlpha = 1f - 0.12f.pow(1f / steps)
+    for (i in 0 until steps) {
+        val s = 0.74f + 0.56f * i / (steps - 1)
+        clipPath(cone(s), ClipOp.Difference) { drawRect(dark.copy(alpha = stepAlpha)) }
+    }
+    // 2. Falloff with distance from the bulb.
+    clipPath(cone(1.3f)) {
         drawRect(
             Brush.radialGradient(
                 0f to Color.Transparent,
-                0.55f to dark.copy(alpha = 0.25f),
-                1f to dark.copy(alpha = 0.86f),
-                center = apex, radius = reach,
-            )
-        )
-        drawRect(
-            Brush.radialGradient(
-                0f to LampGlow.copy(alpha = 0.28f),
-                1f to Color.Transparent,
-                center = apex, radius = reach,
+                0.45f to dark.copy(alpha = 0.18f),
+                1f to dark.copy(alpha = 0.8f),
+                center = apex, radius = h * 0.95f,
             )
         )
     }
+    // 3. Warm air in the beam, feathered over three nested cones.
+    for (s in floatArrayOf(0.8f, 0.95f, 1.1f)) {
+        clipPath(cone(s)) {
+            drawRect(
+                Brush.radialGradient(
+                    0f to LampGlow.copy(alpha = 0.12f),
+                    1f to Color.Transparent,
+                    center = apex, radius = h * 0.8f,
+                )
+            )
+        }
+    }
+    // 4. The pool of light where the beam lands on the page.
+    val poolY = apex.y - h * 0.32f
+    val poolR = neck + h * 0.32f * spread
+    val poolCenter = Offset(apex.x, poolY)
+    scale(scaleX = 1f, scaleY = 0.55f, pivot = poolCenter) {
+        drawCircle(
+            Brush.radialGradient(
+                0f to LampGlow.copy(alpha = 0.26f),
+                0.6f to LampGlow.copy(alpha = 0.08f),
+                1f to Color.Transparent,
+                center = poolCenter, radius = poolR,
+            ),
+            radius = poolR, center = poolCenter,
+        )
+    }
+    // 5. The bulb: a hot core with a halo.
+    val bulbR = neck * 2.6f
+    drawCircle(
+        Brush.radialGradient(
+            0f to Color(0xFFFFF6E6).copy(alpha = 0.95f),
+            0.25f to LampGlow.copy(alpha = 0.55f),
+            1f to Color.Transparent,
+            center = apex, radius = bulbR,
+        ),
+        radius = bulbR, center = apex,
+    )
 }
 
 private fun Color.darken(f: Float) = Color(red * (1 - f), green * (1 - f), blue * (1 - f), alpha)

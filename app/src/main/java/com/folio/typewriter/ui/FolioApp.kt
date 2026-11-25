@@ -16,10 +16,27 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.folio.typewriter.CrashReporter
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.Surface
+import androidx.compose.material3.toShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -92,41 +109,66 @@ fun FolioApp(vm: FolioViewModel) {
     }
 
     FolioTheme(paper = settings.paper.color) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-                    val colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                        indicatorColor = MaterialTheme.colorScheme.primary,
-                    )
-                    NavigationBarItem(
-                        selected = screen == "home", onClick = { screen = "home" },
-                        icon = { Icon(FolioIcons.Home, null) }, label = { Text("Home") }, colors = colors,
-                    )
-                    NavigationBarItem(
-                        selected = screen == "studio", onClick = { screen = "studio" },
-                        icon = { Icon(FolioIcons.Studio, null) }, label = { Text("Studio") }, colors = colors,
-                    )
-                }
-            },
-        ) { padding ->
+        // Screens run edge to edge; the two-icon tab pill floats over them.
+        val insets = WindowInsets.systemBars.asPaddingValues()
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             AnimatedContent(
                 targetState = screen,
                 transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.96f)) togetherWith fadeOut() },
                 label = "tabs",
             ) { s ->
                 when (s) {
-                    "studio" -> StudioScreen(settings, { vm.updateSettings(it) }, padding)
+                    "studio" -> StudioScreen(settings, { vm.updateSettings(it) }, insets)
                     else -> HomeScreen(
                         notes = notes,
                         onOpen = { lamp = settings.lampByDefault; editingId = it },
                         onNew = { lamp = settings.lampByDefault; editingId = System.currentTimeMillis() },
                         onDelete = { vm.delete(it) },
-                        contentPadding = padding,
+                        contentPadding = insets,
                     )
                 }
             }
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 12.dp,
+                tonalElevation = 3.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 28.dp),
+            ) {
+                Row(
+                    Modifier.padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TabIcon(FolioIcons.Home, "Home", screen == "home") { screen = "home" }
+                    TabIcon(FolioIcons.Studio, "Studio", screen == "studio") { screen = "studio" }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun TabIcon(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        label = "tabBg",
+    )
+    val fg by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        label = "tabFg",
+    )
+    Box(
+        Modifier
+            .size(52.dp)
+            .clip(if (selected) MaterialShapes.Cookie9Sided.toShape() else CircleShape)
+            .background(bg)
+            .clickable(role = Role.Tab, onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(24.dp))
     }
 }

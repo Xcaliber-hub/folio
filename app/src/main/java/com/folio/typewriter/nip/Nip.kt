@@ -76,6 +76,8 @@ fun DrawScope.drawNipMark(ink: Color, paper: Color) {
 @Composable
 fun RollerBar(
     carriageX: Float,
+    /** Vertical hop of the carriage in px (negative = up); the rod stays put. */
+    carriageLift: Float = 0f,
     ink: Color,
     paper: Color,
     modifier: Modifier = Modifier,
@@ -95,7 +97,7 @@ fun RollerBar(
         // carriage, kept inside the caps
         val half = (NipGeometry.CARRIAGE_RIGHT - NipGeometry.CARRIAGE_LEFT) / 2f * unit
         val x = carriageX.coerceIn(capW + half, size.width - capW - half)
-        drawCarriage(x, 0f, unit, ink, paper)
+        drawCarriage(x, carriageLift, unit, ink, paper)
     }
 }
 
