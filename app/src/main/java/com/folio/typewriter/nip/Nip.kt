@@ -41,13 +41,16 @@ private object NipPaths {
 }
 
 /** Draws the carriage (pill + dots + I-beam) with its centre at [centerX], top at [top]. */
-fun DrawScope.drawCarriage(centerX: Float, top: Float, unit: Float, ink: Color, paper: Color) {
+fun DrawScope.drawCarriage(centerX: Float, top: Float, unit: Float, ink: Color, paper: Color, guideLift: Float = 0f) {
     translate(left = centerX - NipGeometry.CARRIAGE_CENTER_X * unit, top = top) {
         scale(unit, unit, pivot = Offset.Zero) {
             // Backfill so the dot holes show the page, never the rod behind them.
             drawPath(NipPaths.pillSolid, paper)
             drawPath(NipPaths.pill, ink)
-            drawPath(NipPaths.ibeam, ink)
+        }
+        // The type guide (the T) is the only part that hops; the pill stays on the rod.
+        translate(top = guideLift) {
+            scale(unit, unit, pivot = Offset.Zero) { drawPath(NipPaths.ibeam, ink) }
         }
     }
 }
@@ -76,7 +79,7 @@ fun DrawScope.drawNipMark(ink: Color, paper: Color) {
 @Composable
 fun RollerBar(
     carriageX: Float,
-    /** Vertical hop of the carriage in px (negative = up); the rod stays put. */
+    /** Vertical hop of the type guide (the T) in px, negative = up; pill and rod stay put. */
     carriageLift: Float = 0f,
     ink: Color,
     paper: Color,
@@ -97,7 +100,7 @@ fun RollerBar(
         // carriage, kept inside the caps
         val half = (NipGeometry.CARRIAGE_RIGHT - NipGeometry.CARRIAGE_LEFT) / 2f * unit
         val x = carriageX.coerceIn(capW + half, size.width - capW - half)
-        drawCarriage(x, carriageLift, unit, ink, paper)
+        drawCarriage(x, 0f, unit, ink, paper, guideLift = carriageLift)
     }
 }
 

@@ -327,7 +327,7 @@ fun EditorScreen(
                         .fillMaxSize()
                         .drawWithContent {
                             drawContent()
-                            if (lamp) drawLamp(Offset(carriageX, rollerTop + px(8.dp) + bob.value), spread = 0.62f, neck = px(14.dp))
+                            if (lamp) drawLamp(Offset(carriageX, rollerTop + px(8.dp)), spread = 1.0f, neck = px(18.dp))
                         }
                 ) {
                     Column(
@@ -341,7 +341,7 @@ fun EditorScreen(
                                 // Flat part: from the curl down.
                                 clipRect(top = fold) { drawLayer(sheetLayer) }
                                 // Above it the sheet wraps back around the platen like a cylinder.
-                                drawPlatenCurl(sheetLayer, fold, radius = px(CurlRadius))
+                                drawPlatenCurl(sheetLayer, fold, radius = px(CurlRadius), margin = px(SheetMargin))
                             }
                             .padding(horizontal = SheetMargin)
                             .heightIn(min = with(density) { sheetMinHeight.toDp() })
@@ -473,42 +473,70 @@ private fun ToolToggle(icon: ImageVector, label: String, checked: Boolean, onCha
 }
 
 /** Radius of the platen the page curls around above the typing line. */
-private val CurlRadius = 150.dp
+private val CurlRadius = 110.dp
 
 /**
  * Draws the part of [layer] above [fold] as if the paper wraps back around a cylinder of
  * [radius]: each thin strip is squashed vertically (it turns away), narrowed (it recedes in
- * perspective) and shaded (it catches less light). Many strips read as one smooth curve.
+ * perspective) and shaded (it catches less light). The strips are thin enough that their
+ * edges read as one smooth curve, and the shading is a continuous gradient laid over the
+ * whole curl afterwards, so no strip boundary is ever darkened twice.
  */
-private fun DrawScope.drawPlatenCurl(layer: GraphicsLayer, fold: Float, radius: Float) {
+private fun DrawScope.drawPlatenCurl(layer: GraphicsLayer, fold: Float, radius: Float, margin: Float) {
     if (fold <= 0f) return
-    val maxAngle = Math.toRadians(96.0).toFloat()
+    val maxAngle = Math.toRadians(92.0).toFloat()
     val arc = minOf(fold, radius * maxAngle)
-    val strips = 48
+    val strips = (arc / 3f).toInt().coerceIn(24, 140)
     val hs = arc / strips
     val cx = size.width / 2f
-    val eye = radius * 2.4f
-    // Far strips first so nearer ones overlap any hairline seams.
+    val eye = radius * 1.8f
+    // Far strips first; each copies 1px extra paper downward so nearer strips cover seams.
     for (i in strips - 1 downTo 0) {
         val t0 = i * hs
-        val t1 = t0 + hs
         val a0 = t0 / radius
-        val a1 = t1 / radius
+        val a1 = (t0 + hs) / radius
         val yBottom = fold - radius * sin(a0)
         val yTop = fold - radius * sin(a1)
         val sy = (yBottom - yTop) / hs
-        val mid = (a0 + a1) / 2f
-        val sx = eye / (eye + radius * (1f - cos(mid)))
+        val sx = eye / (eye + radius * (1f - cos((a0 + a1) / 2f)))
         val srcBottom = fold - t0
         withTransform({
             translate(left = cx * (1f - sx), top = yBottom - srcBottom * sy)
             scale(sx, sy, pivot = Offset.Zero)
         }) {
-            clipRect(top = srcBottom - hs - 1.5f, bottom = srcBottom) {
+            clipRect(top = srcBottom - hs - 1f, bottom = srcBottom + if (i == 0) 0f else 0.5f) {
                 drawLayer(layer)
-                drawRect(Color.Black.copy(alpha = 0.5f * (1f - cos(mid))))
             }
         }
+    }
+    // One smooth shadow over the whole curl: brightest at the bend, darkest where it turns away.
+    val topY = fold - radius * sin(arc / radius)
+    val stops = Array(9) { k ->
+        val f = k / 8f // 0 = top of the curl, 1 = the bend
+        val y = topY + (fold - topY) * f
+        val angle = kotlin.math.asin(((fold - y) / radius).coerceIn(0f, 1f))
+        f to Color.Black.copy(alpha = 0.62f * (1f - cos(angle)))
+    }
+    // Clip it to the paper's own receding outline so the margins beside it stay untouched.
+    val outline = Path().apply {
+        val n = 24
+        fun edge(k: Int, left: Boolean): Offset {
+            val ang = (arc / radius) * k / n
+            val sxk = eye / (eye + radius * (1f - cos(ang)))
+            val half = (cx - margin) * sxk
+            return Offset(if (left) cx - half else cx + half, fold - radius * sin(ang))
+        }
+        moveTo(edge(0, true).x, fold)
+        for (k in 1..n) edge(k, true).let { lineTo(it.x, it.y) }
+        for (k in n downTo 0) edge(k, false).let { lineTo(it.x, it.y) }
+        close()
+    }
+    clipPath(outline) {
+        drawRect(
+            Brush.verticalGradient(*stops, startY = topY, endY = fold),
+            topLeft = Offset(0f, topY),
+            size = androidx.compose.ui.geometry.Size(size.width, fold - topY),
+        )
     }
 }
 
@@ -524,7 +552,7 @@ private fun DrawScope.drawLamp(apex: Offset, spread: Float, neck: Float) {
     val reach = src.y + 80f
     val half = atan(spread) / (2f * PI.toFloat()) // half-angle, in turns
     val up = 0.75f // sweep stops run clockwise from 3 o'clock; straight up is 0.75
-    val feather = 0.045f
+    val feather = 0.06f
     fun beam(inside: Color, outside: Color) = Brush.sweepGradient(
         0f to outside,
         (up - half - feather) to outside,
